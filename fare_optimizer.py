@@ -9,12 +9,13 @@ class FareOptimizer:
                  historical_analyzer: HistoricalAnalyzer,
                  month: int,
                  flight_type: str,
-                 std_multiplier: float = 2.0,
+                 std_multiplier: float = 3.0,
                  seats: int = 500000):
         """
-        Initialize the fare optimizer with historical constraints.
+        Initialize the fare optimizer with historical constraints and capacity limits.
         """
         self.passenger_predictor = passenger_predictor
+        self.capacity = seats
         
         # Get historical constraints
         fare_constraints, _, _ = \
@@ -27,49 +28,78 @@ class FareOptimizer:
         
         self.min_passengers = 0
         self.max_passengers = seats
+
+    def find_capacity_matching_fare(self, current_fare: float) -> float:
+        """
+        Find the fare that matches capacity when demand exceeds it.
+        Uses binary search to find the optimal fare that brings demand down to capacity.
+        """
+        left = current_fare
+        right = self.max_fare * 1.5  # Allow some flexibility above max_fare
+        target = self.capacity
+        tolerance = 1.0  # Acceptable difference in passengers
+        
+        while (right - left) > 0.1:  # 0.1 precision for fare
+            mid_fare = (left + right) / 2
+            predicted_pax = self.passenger_predictor(mid_fare)
+            
+            if abs(predicted_pax - target) <= tolerance:
+                return mid_fare
+            elif predicted_pax > target:
+                left = mid_fare
+            else:
+                right = mid_fare
                 
+        return left
+
     def objective_function(self, avg_fare: float) -> float:
         """
-        Calculate the objective function with historical constraints.
+        Calculate the objective function that maximizes revenue while respecting capacity.
+        Only increases fares if demand exceeds capacity.
         """
         try:
-            # Ensure fare is within historical bounds
-            if not self.min_fare <= avg_fare <= self.max_fare:
+            # Initial check for fare bounds
+            if avg_fare < self.min_fare:
                 return float('inf')
             
-            # Get predicted passengers
-            passengers = self.passenger_predictor(avg_fare)
+            # Get predicted passengers at current fare
+            predicted_pax = self.passenger_predictor(avg_fare)
             
-            # Handle invalid passenger numbers
-            if not isinstance(passengers, (int, float)) or np.isnan(passengers):
+            # Handle invalid predictions
+            if not isinstance(predicted_pax, (int, float)) or np.isnan(predicted_pax):
                 return float('inf')
             
-            # Calculate revenue
-            revenue = passengers * avg_fare
+            # If demand exceeds capacity, increase fare to match capacity
+            if predicted_pax > self.capacity:
+                # Find fare that brings demand to capacity
+                optimal_fare = self.find_capacity_matching_fare(avg_fare)
+                predicted_pax = min(self.passenger_predictor(optimal_fare), self.capacity)
+                revenue = predicted_pax * optimal_fare
+            else:
+                revenue = predicted_pax * avg_fare
             
-            # Apply penalties based on deviation from historical patterns
-            fare_penalty = ((avg_fare - self.expected_fare) / self.expected_fare) ** 2
+            # Apply a small penalty for extreme deviations from expected fare
+            # Only when we're not at capacity
+            if predicted_pax < self.capacity:
+                fare_deviation = abs(avg_fare - self.expected_fare) / self.expected_fare
+                penalty = 0.05 * fare_deviation  # Reduced penalty impact
+                revenue *= (1 - penalty)
             
-            # Adjusted revenue with penalties
-            adjusted_revenue = revenue * (1 - 0.1 * (fare_penalty))
-            
-            return -adjusted_revenue
+            return -revenue  # Negative because we're minimizing
             
         except Exception as e:
             return float('inf')
     
     def optimize(self, initial_guess: float = None) -> tuple[float, float, float]:
         """
-        Find the optimal fare with historical constraints.
+        Find the optimal fare that maximizes revenue while respecting capacity constraints.
         """
         try:
             # Use expected fare as initial guess if none provided
             if initial_guess is None:
                 initial_guess = self.expected_fare
-            else:
-                initial_guess = max(self.min_fare, min(initial_guess, self.max_fare))
             
-            # Use minimize_scalar with bounds
+            # First optimize normally within historical bounds
             result = minimize_scalar(
                 self.objective_function,
                 bounds=(self.min_fare, self.max_fare),
@@ -78,7 +108,7 @@ class FareOptimizer:
             )
             
             if not result.success:
-                # Fall back to grid search with historical constraints
+                # Fall back to grid search
                 fares = np.linspace(self.min_fare, self.max_fare, 100)
                 revenues = [-self.objective_function(f) for f in fares]
                 best_idx = np.argmax(revenues)
@@ -88,18 +118,18 @@ class FareOptimizer:
                 optimal_fare = result.x
                 optimal_value = -result.fun
             
-            # Get final passenger prediction
-            passengers = self.passenger_predictor(optimal_fare)
+            # Get predicted passengers at optimal fare
+            predicted_pax = self.passenger_predictor(optimal_fare)
             
-            # Validate results against historical patterns
-            if optimal_fare < self.min_fare or optimal_fare > self.max_fare:
-                optimal_fare = self.expected_fare
+            # If demand exceeds capacity, find the fare that matches capacity
+            if predicted_pax > self.capacity:
+                optimal_fare = self.find_capacity_matching_fare(optimal_fare)
+                predicted_pax = min(self.passenger_predictor(optimal_fare), self.capacity)
+                optimal_value = predicted_pax * optimal_fare
             
-            if passengers < self.min_passengers or passengers > self.max_passengers:
-                optimal_value = passengers * optimal_fare
-
-            return optimal_fare, optimal_value, passengers
+            return optimal_fare, optimal_value, predicted_pax
             
         except Exception as e:
-            # Fallback to historical averages if optimization fails
-            return self.expected_fare, self.expected_fare 
+            # Fallback to expected fare with capacity check
+            predicted_pax = min(self.passenger_predictor(self.expected_fare), self.capacity)
+            return self.expected_fare, predicted_pax * self.expected_fare, predicted_pax

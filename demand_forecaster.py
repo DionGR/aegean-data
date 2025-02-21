@@ -41,12 +41,9 @@ class DemandForecaster:
                 'FARE': df['FARE'].mean(),
                 'COMPETITION_FARE': df['COMPETITION_FARE'].mean(),
                 'SEASONALITY': df['SEASONALITY'].mean(),
-                'SEATS': df['SEATS'].mean(),
                 'PAX': df['PAX'].mean()
             }
             
-            # Add derived features with NaN handling
-            df['load_factor'] = np.clip(df['PAX'] / df['SEATS'], 0, 1)
             df['month'] = df['ds'].dt.month
             
             # Add price elasticity features
@@ -99,7 +96,6 @@ class DemandForecaster:
         
         # Add regressors
         model.add_regressor('seasonality')
-        model.add_regressor('seats')
         model.add_regressor('fare_ratio')
         model.add_regressor('log_fare')
         model.add_regressor('log_comp_fare')
@@ -110,7 +106,6 @@ class DemandForecaster:
             'ds': df['ds'],
             'y': df['y'],
             'seasonality': df['SEASONALITY'],
-            'seats': df['SEATS'],
             'fare_ratio': df['fare_ratio'],
             'log_fare': df['log_fare'],
             'log_comp_fare': df['log_comp_fare'],
@@ -121,7 +116,7 @@ class DemandForecaster:
         model.fit(train_df)
         return model
 
-    def predict_demand(self, year, month, flight_type, seats=None, fare=None):
+    def predict_demand(self, year, month, flight_type, fare=None):
         """Predict passenger demand with robust NaN handling."""
         if flight_type not in ['D', 'I']:
             raise ValueError("flight_type must be 'D' or 'I'")
@@ -133,11 +128,8 @@ class DemandForecaster:
         
         # Use mean values as defaults
         mean_values = self.mean_values[flight_type]
-        seats_value = seats if seats is not None else mean_values['SEATS']
         fare_value = fare if fare is not None else mean_values['FARE']
         
-        # Ensure positive values
-        seats_value = max(1, seats_value)
         fare_value = max(0.01, fare_value)
         
         # Calculate price elasticity features with safety checks
@@ -154,7 +146,6 @@ class DemandForecaster:
         
         # Prepare prediction features
         future_date['seasonality'] = mean_values['SEASONALITY']
-        future_date['seats'] = seats_value
         future_date['fare_ratio'] = scaled_features[0][2]
         future_date['log_fare'] = log_fare
         future_date['log_comp_fare'] = log_comp_fare
@@ -170,12 +161,7 @@ class DemandForecaster:
                 fare_multiplier = np.exp(-0.5 * (fare_value / avg_comp_fare - 3))
                 predicted_pax *= fare_multiplier
             
-            # Apply seats constraint
-            if seats:
-                predicted_pax = min(predicted_pax, seats_value)
-            
             # Calculate load factor
-            load_factor = predicted_pax / seats_value if seats_value > 0 else 0
             load_factor = min(1.0, max(0.0, load_factor))
             
             return {
@@ -191,7 +177,6 @@ class DemandForecaster:
             mean_pax = mean_values['PAX']
             return {
                 'predicted_pax': int(round(mean_pax)),
-                'load_factor': round(mean_pax / seats_value, 3),
                 'lower_bound': int(round(0.8 * mean_pax)),
                 'upper_bound': int(round(1.2 * mean_pax)),
                 'seasonality': mean_values['SEASONALITY']
