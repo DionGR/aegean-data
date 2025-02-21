@@ -17,7 +17,7 @@ class FareOptimizer:
         self.passenger_predictor = passenger_predictor
         
         # Get historical constraints
-        fare_constraints, pax_constraints, _ = \
+        fare_constraints, _, _ = \
             historical_analyzer.get_monthly_constraints(month, flight_type, std_multiplier)
         
         # Set constraints based on historical data
@@ -42,10 +42,6 @@ class FareOptimizer:
             
             # Handle invalid passenger numbers
             if not isinstance(passengers, (int, float)) or np.isnan(passengers):
-                return float('inf')
-            
-            # Check passenger constraints
-            if passengers < self.min_passengers or passengers > self.max_passengers:
                 return float('inf')
             
             # Calculate revenue

@@ -23,14 +23,40 @@ class DemandForecaster:
         self._preprocess_data()
         self._train_models()
         
-    def _train_models(self):
-        """Train separate Prophet models for domestic and international flights."""
-        # Train domestic flights model
-        self.models['D'] = self._create_and_fit_model(self.domestic_df)
+    def _preprocess_data(self):
+        """Preprocess the data for Prophet format with NaN handling."""
+        # Create separate dataframes for domestic and international flights
+        self.domestic_df = self.data[self.data['D/I'] == 'D'].copy()
+        self.international_df = self.data[self.data['D/I'] == 'I'].copy()
         
-        # Train international flights model
-        self.models['I'] = self._create_and_fit_model(self.international_df)
-    
+        for flight_type, df in [('D', self.domestic_df), ('I', self.international_df)]:
+            # Create datetime column for Prophet (ds)
+            df['ds'] = pd.to_datetime(df['YEAR'].astype(str) + '-' + df['MONTH'].astype(str).str.zfill(2) + '-01')
+            
+            # Set target variable (y)
+            df['y'] = df['PAX']
+            
+            # Store mean values for later use
+            self.mean_values[flight_type] = {
+                'FARE': df['FARE'].mean(),
+                'COMPETITION_FARE': df['COMPETITION_FARE'].mean(),
+                'SEASONALITY': df['SEASONALITY'].mean(),
+                'SEATS': df['SEATS'].mean(),
+                'PAX': df['PAX'].mean()
+            }
+            
+            # Add derived features with NaN handling
+            df['load_factor'] = np.clip(df['PAX'] / df['SEATS'], 0, 1)
+            df['month'] = df['ds'].dt.month
+            
+            # Add price elasticity features
+            df = self._calculate_price_elasticity_features(df)
+            
+            # Scale features
+            features_to_scale = ['FARE', 'COMPETITION_FARE', 'fare_ratio', 'fare_seasonality']
+            scaled_features = self.scalers[flight_type].fit_transform(df[features_to_scale])
+            df[features_to_scale] = scaled_features
+
     def _calculate_price_elasticity_features(self, df):
         """Calculate price elasticity related features with NaN handling."""
         # Handle potential division by zero or NaN in competition fare
@@ -54,40 +80,14 @@ class DemandForecaster:
         
         return df
 
-    def _preprocess_data(self):
-        """Preprocess the data for Prophet format with NaN handling."""
-        # Create separate dataframes for domestic and international flights
-        self.domestic_df = self.data[self.data['D/I'] == 'D'].copy()
-        self.international_df = self.data[self.data['D/I'] == 'I'].copy()
+    def _train_models(self):
+        """Train separate Prophet models for domestic and international flights."""
+        # Train domestic flights model
+        self.models['D'] = self._create_and_fit_model(self.domestic_df)
         
-        for flight_type, df in [('D', self.domestic_df), ('I', self.international_df)]:
-            # Convert YEAR and MONTH to datetime
-            df['ds'] = pd.to_datetime(df['YEAR'].astype(str) + '-' + 
-                                    df['MONTH'].astype(str) + '-01')
-            df['y'] = df['PAX']
-            
-            # Store mean values for later use
-            self.mean_values[flight_type] = {
-                'FARE': df['FARE'].mean(),
-                'COMPETITION_FARE': df['COMPETITION_FARE'].mean(),
-                'SEASONALITY': df['SEASONALITY'].mean(),
-                'SEATS': df['SEATS'].mean(),
-                'PAX': df['PAX'].mean()
-            }
-            
-            # Add derived features with NaN handling
-            df['load_factor'] = np.clip(df['PAX'] / df['SEATS'], 0, 1)
-            df['month'] = df['ds'].dt.month
-            
-            # Add price elasticity features
-            df = self._calculate_price_elasticity_features(df)
-        
-        # Scale features for each type of flight
-        for flight_type, df in [('D', self.domestic_df), ('I', self.international_df)]:
-            features_to_scale = ['FARE', 'COMPETITION_FARE', 'fare_ratio', 'fare_seasonality']
-            scaled_features = self.scalers[flight_type].fit_transform(df[features_to_scale])
-            df[features_to_scale] = scaled_features
-            
+        # Train international flights model
+        self.models['I'] = self._create_and_fit_model(self.international_df)
+    
     def _create_and_fit_model(self, df):
         """Create and fit a Prophet model with custom features."""
         model = Prophet(
@@ -97,11 +97,9 @@ class DemandForecaster:
             seasonality_mode='multiplicative'
         )
         
-        # Add base features
+        # Add regressors
         model.add_regressor('seasonality')
         model.add_regressor('seats')
-        
-        # Add price elasticity features
         model.add_regressor('fare_ratio')
         model.add_regressor('log_fare')
         model.add_regressor('log_comp_fare')
@@ -124,15 +122,13 @@ class DemandForecaster:
         return model
 
     def predict_demand(self, year, month, flight_type, seats=None, fare=None):
-        """
-        Predict passenger demand with robust NaN handling.
-        """
+        """Predict passenger demand with robust NaN handling."""
         if flight_type not in ['D', 'I']:
             raise ValueError("flight_type must be 'D' or 'I'")
             
         # Create prediction dataframe
         future_date = pd.DataFrame({
-            'ds': [datetime(year, month, 1)]
+            'ds': [pd.to_datetime(f"{year}-{month:02d}-01")]
         })
         
         # Use mean values as defaults
@@ -165,7 +161,7 @@ class DemandForecaster:
         future_date['fare_seasonality'] = scaled_features[0][3]
         
         try:
-            # Make prediction with error handling
+            # Make prediction
             forecast = self.models[flight_type].predict(future_date)
             predicted_pax = max(0, forecast['yhat'].iloc[0])
             
@@ -178,11 +174,7 @@ class DemandForecaster:
             if seats:
                 predicted_pax = min(predicted_pax, seats_value)
             
-            # Handle any remaining NaN values
-            if np.isnan(predicted_pax):
-                predicted_pax = mean_values['PAX']  # Use historical mean as fallback
-            
-            # Calculate load factor with safety check
+            # Calculate load factor
             load_factor = predicted_pax / seats_value if seats_value > 0 else 0
             load_factor = min(1.0, max(0.0, load_factor))
             
@@ -195,7 +187,7 @@ class DemandForecaster:
             }
             
         except Exception as e:
-            # Fallback to historical mean values if prediction fails
+            # Fallback to historical mean values
             mean_pax = mean_values['PAX']
             return {
                 'predicted_pax': int(round(mean_pax)),
@@ -204,20 +196,3 @@ class DemandForecaster:
                 'upper_bound': int(round(1.2 * mean_pax)),
                 'seasonality': mean_values['SEASONALITY']
             }
-
-    def _validate_prediction(self, prediction, fare, avg_comp_fare):
-        """Validate prediction results for realism."""
-        if fare <= 0:
-            raise ValueError("Fare must be positive")
-        
-        if prediction['load_factor'] > 0.95:
-            # Adjust for unrealistically high load factors
-            prediction['predicted_pax'] *= 0.95 / prediction['load_factor']
-            prediction['load_factor'] = 0.95
-        
-        if fare > 5 * avg_comp_fare and prediction['load_factor'] > 0.5:
-            # Adjust for unrealistically high demand at very high fares
-            prediction['predicted_pax'] *= 0.5 / prediction['load_factor']
-            prediction['load_factor'] = 0.5
-        
-        return prediction

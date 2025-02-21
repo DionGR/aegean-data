@@ -9,11 +9,11 @@ historical_analyzer = HistoricalAnalyzer('aegean_dataset.csv')
 forecaster = DemandForecaster('aegean_dataset.csv')
 
 # Setup for January domestic flights
-MONTH = 2
+MONTH = 1
 FLIGHT_TYPE = 'I'
 
 def passenger_predictor(avg_fare: float) -> float:
-    result = forecaster.predict_demand(2024, MONTH, FLIGHT_TYPE, seats=1500000, fare=avg_fare)
+    result = forecaster.predict_demand(2024, MONTH, FLIGHT_TYPE, seats=1000000, fare=avg_fare)
     return float(result['predicted_pax'])
 
 
