@@ -2,24 +2,38 @@ import numpy as np
 from scipy.optimize import minimize_scalar
 from typing import Callable
 from datetime import datetime
+from historical_analyzer import HistoricalAnalyzer
 
 class FareOptimizer:
-    def __init__(self, passenger_predictor: Callable[[float], float], max_passengers: int = 1000,
-                 min_fare: float = None, max_fare: float = None):
+    def __init__(self, passenger_predictor: Callable[[float], float],
+                 historical_analyzer: HistoricalAnalyzer,
+                 month: int,
+                 flight_type: str,
+                 std_multiplier: float = 2.0,
+                 seats: int = 500000):
         """
-        Initialize the fare optimizer with bounds checking.
+        Initialize the fare optimizer with historical constraints.
         """
         self.passenger_predictor = passenger_predictor
-        self.max_passengers = max_passengers
-        self.min_fare = max(1.0, min_fare) if min_fare is not None else 1.0
-        self.max_fare = min(1e4, max_fare) if max_fare is not None else 1e4
         
+        # Get historical constraints
+        fare_constraints, pax_constraints, _ = \
+            historical_analyzer.get_monthly_constraints(month, flight_type, std_multiplier)
+        
+        # Set constraints based on historical data
+        self.min_fare = fare_constraints['min']
+        self.max_fare = fare_constraints['max']
+        self.expected_fare = fare_constraints['mean']
+        
+        self.min_passengers = 0
+        self.max_passengers = seats
+                
     def objective_function(self, avg_fare: float) -> float:
         """
-        Calculate the objective function with error handling.
+        Calculate the objective function with historical constraints.
         """
         try:
-            # Ensure fare is within reasonable bounds
+            # Ensure fare is within historical bounds
             if not self.min_fare <= avg_fare <= self.max_fare:
                 return float('inf')
             
@@ -31,25 +45,33 @@ class FareOptimizer:
                 return float('inf')
             
             # Check passenger constraints
-            if passengers <= 0 or passengers > self.max_passengers:
+            if passengers < self.min_passengers or passengers > self.max_passengers:
                 return float('inf')
             
             # Calculate revenue
             revenue = passengers * avg_fare
             
-            return -revenue  
+            # Apply penalties based on deviation from historical patterns
+            fare_penalty = ((avg_fare - self.expected_fare) / self.expected_fare) ** 2
+            
+            # Adjusted revenue with penalties
+            adjusted_revenue = revenue * (1 - 0.1 * (fare_penalty))
+            
+            return -adjusted_revenue
             
         except Exception as e:
-            # Return infinity for any calculation errors
             return float('inf')
     
-    def optimize(self, initial_guess: float = 100.0) -> tuple[float, float, float]:
+    def optimize(self, initial_guess: float = None) -> tuple[float, float, float]:
         """
-        Find the optimal fare with robust error handling.
+        Find the optimal fare with historical constraints.
         """
         try:
-            # Ensure initial guess is within bounds
-            initial_guess = max(self.min_fare, min(initial_guess, self.max_fare))
+            # Use expected fare as initial guess if none provided
+            if initial_guess is None:
+                initial_guess = self.expected_fare
+            else:
+                initial_guess = max(self.min_fare, min(initial_guess, self.max_fare))
             
             # Use minimize_scalar with bounds
             result = minimize_scalar(
@@ -60,7 +82,7 @@ class FareOptimizer:
             )
             
             if not result.success:
-                # Fall back to grid search if optimization fails
+                # Fall back to grid search with historical constraints
                 fares = np.linspace(self.min_fare, self.max_fare, 100)
                 revenues = [-self.objective_function(f) for f in fares]
                 best_idx = np.argmax(revenues)
@@ -73,15 +95,15 @@ class FareOptimizer:
             # Get final passenger prediction
             passengers = self.passenger_predictor(optimal_fare)
             
-            # Validate results
-            if np.isnan(optimal_value) or np.isnan(passengers):
-                raise ValueError("Optimization resulted in NaN values")
+            # Validate results against historical patterns
+            if optimal_fare < self.min_fare or optimal_fare > self.max_fare:
+                optimal_fare = self.expected_fare
             
+            if passengers < self.min_passengers or passengers > self.max_passengers:
+                optimal_value = passengers * optimal_fare
+
             return optimal_fare, optimal_value, passengers
             
         except Exception as e:
-            # Fallback to a reasonable default if optimization fails completely
-            default_fare = initial_guess
-            passengers = self.passenger_predictor(default_fare)
-            revenue = passengers * default_fare
-            return default_fare, revenue, passengers
+            # Fallback to historical averages if optimization fails
+            return self.expected_fare, self.expected_fare 
