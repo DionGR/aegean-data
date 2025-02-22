@@ -11,7 +11,7 @@ forecaster = DemandForecaster('aegean_dataset.csv')
 # Setup for January domestic flights
 MONTH = 1
 FLIGHT_TYPE = 'D'
-seats = 200000
+seats = 1500000
 
 def passenger_predictor(avg_fare: float) -> float:
     result = forecaster.predict_demand(2024, MONTH, FLIGHT_TYPE, fare=avg_fare)
@@ -28,7 +28,7 @@ optimizer = FareOptimizer(
 )
 
 # Get historical constraints for reference
-fare_constraints, _, _ = \
+fare_constraints, _ = \
     historical_analyzer.get_monthly_constraints(MONTH, FLIGHT_TYPE)
 
 # Optimize with error handling

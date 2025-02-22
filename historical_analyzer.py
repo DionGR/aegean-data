@@ -84,11 +84,11 @@ class HistoricalAnalyzer:
             'mean': stats['pax']['mean']
         }
         
-        # Add load factor constraints
-        load_factor_constraints = {
-            'min': max(0.3, stats['load_factor']['mean'] - std_multiplier * stats['load_factor']['std']),
-            'max': min(0.95, stats['load_factor']['mean'] + std_multiplier * stats['load_factor']['std']),
-            'mean': stats['load_factor']['mean']
-        }
+        # # Add load factor constraints
+        # load_factor_constraints = {
+        #     'min': max(0.3, stats['load_factor']['mean'] - std_multiplier * stats['load_factor']['std']),
+        #     'max': min(0.95, stats['load_factor']['mean'] + std_multiplier * stats['load_factor']['std']),
+        #     'mean': stats['load_factor']['mean']
+        # }
         
-        return fare_constraints, pax_constraints, load_factor_constraints
+        return fare_constraints, pax_constraints

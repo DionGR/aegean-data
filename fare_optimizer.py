@@ -18,17 +18,16 @@ class FareOptimizer:
         self.capacity = seats
         
         # Get historical constraints
-        fare_constraints, _, _ = \
-            historical_analyzer.get_monthly_constraints(month, flight_type, std_multiplier)
+        fare_constraints, pax_constraints = historical_analyzer.get_monthly_constraints(month, flight_type, std_multiplier)
         
         # Set constraints based on historical data
         self.min_fare = fare_constraints['min']
         self.max_fare = fare_constraints['max']
         self.expected_fare = fare_constraints['mean']
         
-        self.min_passengers = 0
-        self.max_passengers = seats
-
+        self.min_passengers = pax_constraints['min']
+        self.max_passengers = pax_constraints['max']
+        
     def find_capacity_matching_fare(self, current_fare: float) -> float:
         """
         Find the fare that matches capacity when demand exceeds it.
@@ -80,7 +79,7 @@ class FareOptimizer:
             
             # Apply a small penalty for extreme deviations from expected fare
             # Only when we're not at capacity
-            if predicted_pax < self.capacity:
+            if predicted_pax < (self.capacity * 0.95):
                 fare_deviation = abs(avg_fare - self.expected_fare) / self.expected_fare
                 penalty = 0.05 * fare_deviation  # Reduced penalty impact
                 revenue *= (1 - penalty)
@@ -104,7 +103,7 @@ class FareOptimizer:
                 self.objective_function,
                 bounds=(self.min_fare, self.max_fare),
                 method='bounded',
-                options={'maxiter': 1000}
+                options={'maxiter': 500}
             )
             
             if not result.success:
@@ -130,6 +129,5 @@ class FareOptimizer:
             return optimal_fare, optimal_value, predicted_pax
             
         except Exception as e:
-            # Fallback to expected fare with capacity check
             predicted_pax = min(self.passenger_predictor(self.expected_fare), self.capacity)
             return self.expected_fare, predicted_pax * self.expected_fare, predicted_pax
